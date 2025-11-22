@@ -14,15 +14,28 @@ defmodule AiOrHumanWeb.GameLive do
     case current_pair do
       nil ->
         socket
-        |> assign(finished?: true)
-        |> assign(left_image_url: nil, right_image_url: nil, ai_position: nil)
+        |> assign(
+          finished?: true,
+          left_image_url: nil,
+          right_image_url: nil,
+          ai_position: nil,
+          current_pair_id: nil,
+          current_pair_stats: nil
+        )
+        |> maybe_finalize_session()
 
       _ ->
+        stats = Game.pair_stats(current_pair.id)
+
         socket
-        |> assign(finished?: false)
-        |> assign(left_image_url: current_pair.left_url)
-        |> assign(right_image_url: current_pair.right_url)
-        |> assign(ai_position: current_pair.ai_position)
+        |> assign(
+          finished?: false,
+          left_image_url: current_pair.left_url,
+          right_image_url: current_pair.right_url,
+          ai_position: current_pair.ai_position,
+          current_pair_id: current_pair.id,
+          current_pair_stats: stats
+        )
     end
   end
 
@@ -34,6 +47,14 @@ defmodule AiOrHumanWeb.GameLive do
     guessed_position = String.to_atom(position)
     correct_position = socket.assigns.ai_position
     correct? = guessed_position == correct_position
+    pair_id = socket.assigns.current_pair_id
+
+    pair_stats =
+      if pair_id do
+        Game.record_pair_guess(pair_id, correct?)
+      else
+        socket.assigns.current_pair_stats
+      end
 
     socket =
       socket
@@ -43,6 +64,7 @@ defmodule AiOrHumanWeb.GameLive do
         [
           %{
             pair_index: socket.assigns.current_index,
+            pair_id: pair_id,
             ai_position: correct_position,
             guess: guessed_position,
             correct?: correct?
@@ -52,6 +74,7 @@ defmodule AiOrHumanWeb.GameLive do
       end)
       |> assign(:last_result, correct?)
       |> assign(:show_result, true)
+      |> assign(:current_pair_stats, pair_stats)
 
     {:noreply, socket}
   end
@@ -100,6 +123,14 @@ defmodule AiOrHumanWeb.GameLive do
             <p class="text-lg mb-6">
               Accuracy: {if @total > 0, do: "#{Float.round(@correct / @total * 100, 1)}%", else: "N/A"}
             </p>
+            <%= if @average_score && not is_nil(@average_score.percentage) do %>
+              <p class="text-lg mb-2">
+                Community average accuracy: {Float.round(@average_score.percentage * 100, 1)}%
+              </p>
+              <p class="text-sm text-gray-600 mb-6">
+                Based on {@average_score.total} total guesses across all players
+              </p>
+            <% end %>
             <button
               phx-click="restart"
               class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-lg"
@@ -139,6 +170,11 @@ defmodule AiOrHumanWeb.GameLive do
               >
                 Next Challenge
               </button>
+              <%= if @current_pair_stats do %>
+                <p class="mt-4 text-gray-600">
+                  Community answers: {@current_pair_stats.correct} correct / {@current_pair_stats.incorrect} wrong
+                </p>
+              <% end %>
             </div>
           <% end %>
         <% end %>
@@ -147,7 +183,10 @@ defmodule AiOrHumanWeb.GameLive do
         <h1 class="text-xl">TODO:</h1>
         <ul class="list-disc list-inside">
           <li class="line-through">Make images appear in consistent pairs</li>
-          <li>Show everage scores at the end</li>
+          <li>
+            Show everage scores at the end and total right/wrong guesses
+            for each image
+          </li>
           <li>Show leaderboards at the end</li>
           <li>Add temp usernames for leaderboards</li>
           <li>Use S3 or similar product for image storage</li>
@@ -170,8 +209,34 @@ defmodule AiOrHumanWeb.GameLive do
       pairs: pairs,
       current_index: 0,
       finished?: false,
-      history: []
+      history: [],
+      current_pair_id: nil,
+      current_pair_stats: nil,
+      average_score: nil,
+      session_recorded?: false
     )
     |> load_current_pair()
+  end
+
+  defp maybe_finalize_session(%{assigns: %{session_recorded?: true}} = socket), do: socket
+
+  defp maybe_finalize_session(%{assigns: %{total: total}} = socket) when total <= 0 do
+    socket
+    |> assign(:session_recorded?, true)
+    |> assign(:average_score, Game.average_score())
+  end
+
+  defp maybe_finalize_session(%{assigns: %{correct: correct, total: total}} = socket) do
+    case Game.record_session_result(correct, total) do
+      {:ok, _result} ->
+        socket
+        |> assign(:session_recorded?, true)
+        |> assign(:average_score, Game.average_score())
+
+      {:error, _changeset} ->
+        socket
+        |> assign(:session_recorded?, true)
+        |> assign(:average_score, Game.average_score())
+    end
   end
 end

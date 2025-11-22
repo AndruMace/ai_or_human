@@ -7,6 +7,8 @@ defmodule AiOrHuman.Game.ImagePair do
   schema "image_pairs" do
     field :ai_url, :string
     field :human_url, :string
+    field :correct_guess_count, :integer, default: 0
+    field :incorrect_guess_count, :integer, default: 0
 
     timestamps(type: :utc_datetime)
   end
